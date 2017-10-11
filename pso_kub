@@ -1,0 +1,431 @@
+Notes:
+centos master
+3 minions in cluster.
+all:
+yum install -y ntp
+
+enable & start ntpd
+disable iptables and firewalld selinux
+
+setup /etc/hosts
+
+create yum repo
+cat << EOF > /etc/yum.repos.d/virt7-docker-common-release.repo
+[virt7-docker-common-release]
+name=virt7-docker-common-release
+baseurl=http://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/
+gpgcheck=0
+
+now install etcd
+master:
+yum install -y --enablerepo=virt7-docker-common-release kubernetes docker
+
+minions:
+yum install -y --enablerepo=virt7-docker-common-release kubernetes docker
+
+all nodes:
+/etc/kubernetes/config
+
+change:
+KUBE_MASTER="--master=http://$(hostname):8080"
+KUBTE_ETCD_SERVERS="--etcd-servers=http://$(hostname):2379"
+
+ONLY MASTER:
+vim /etc/etcd/etcd.conf
+
+change:
+ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:2379"
+ETCD_ADVERTISE_CLIENT_URLS="http://0.0.0.0:2379"
+
+vim /etc/kubernetes/apiserver
+change:
+KUBE_API_ADDRESS="--address=0.0.0.0"
+KUBE_API_PORT="--port=8080"
+KUBELET_PORT="--kubelet-port=10250"
+KUBE_SERVICE_ADDRESS=--service-cluster-ip-range=192..../24"
+KUBE_ADMISSION_CONTROL < comment out this line.
+
+Ensure you've started the master services prior to the minion services.
+enable and start services etcd kube-apiserver kube-controller-manager kube-scheduler
+
+
+now to configure minions:
+vim /etc/kubernetes/config
+KUBE_MASTER="--master=http://{{ master }}:8080"
+KUBE_ETC_SERVERS="--etc-servers=http://{{ master }}:2379"
+
+vim /etc/kubernetes/kubelet
+change:
+KUBELET_ADDRESS="0.0.0.0"
+KUBELET_PORT="--port=10250"
+KUBELET_HOSTNAME="--hostname-override=$(hostname_minion)"
+KUBELET_API_SERVER="--api-servers=http://{{ master }}:8080"
+KUBELET_PPOD_INFRA_CONTAINER < comment out
+
+start and enable services:
+kube-proxy kubelet docker
+
+verify if docker is running the way we want.
+docker images
+docker --version
+docker pull hello-world
+docker images
+docker run hello-world
+
+docker ps
+docker ps -a
+
+configure all minions.
+kubectl
+
+
+Dealing with docker:
+Add insecure local registries if needed:
+INSECURE_REGISTRY='--insecure-registry 172.30.0.0/16'
+
+build an image:
+create file like:
+[root@k8s-node04 RunAsUser]# cat Dockerfile
+# This is a docker file based on the latest centos 7 image - non privileged user entry.
+FROM centos:latest
+MAINTAINER doofus@gmail.com
+
+RUN useradd -ms /bin/bash user
+USER user
+
+
+
+docker build -t centos7/nonroot:v1 .
+Sending build context to Docker daemon 2.048 kB
+Step 1 : FROM centos:latest
+ ---> 328edcd84f1b
+Step 2 : MAINTAINER eddie.p.vasquez@gmail.com
+ ---> Running in dc86d23a57cb
+ ---> 516531c1c0d0
+Removing intermediate container dc86d23a57cb
+Step 3 : USER user
+ ---> Running in fc580e49f310
+ ---> e86d30948be9
+Removing intermediate container fc580e49f310
+Successfully built e86d30948be9
+
+
+
+[root@k8s-node04 RunAsUser]# docker run -it centos7/nonroot:v1 /bin/bash
+[user@12c9706af24a /]$ ls
+anaconda-post.log  bin  dev  etc  home  lib  lib64  lost+found  media  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var
+
+
+[root@k8s-node04 RunAsUser]# docker start sleepy_turing
+sleepy_turing
+[root@k8s-node04 RunAsUser]# docker ps
+CONTAINER ID        IMAGE                COMMAND             CREATED              STATUS              PORTS               NAMES
+12c9706af24a        centos7/nonroot:v1   "/bin/bash"         About a minute ago   Up 4 seconds                            sleepy_turing
+[root@k8s-node04 RunAsUser]# docker exec -u 0 -it sleepy_turing /bin/bash
+[root@12c9706af24a /]# 
+
+to reattach:
+[root@k8s-node04 RunAsUser]# docker exec -it sleepy_turing /bin/bash
+[user@12c9706af24a /]$ uptime
+ 22:35:26 up 45 min,  0 users,  load average: 0.02, 0.16, 0.18
+
+
+and stop container:
+[root@k8s-node04 RunAsUser]# docker ps
+CONTAINER ID        IMAGE                COMMAND             CREATED             STATUS              PORTS               NAMES
+12c9706af24a        centos7/nonroot:v1   "/bin/bash"         6 minutes ago       Up 5 minutes                            sleepy_turing
+[root@k8s-node04 RunAsUser]# docker stop 12c9706af24a
+12c9706af24a
+[root@k8s-node04 RunAsUser]# docker ps
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
+
+Pull down an nginx docker image:
+docker pull nginx:latest
+
+run as daemon:
+docker run -d b8efb18f159b
+
+find IP addres
+docker inspect hopeful_wright
+
+test link to local container:
+elinks http://172.17.0.2
+
+manage ports and forwarding: (redirect local port 80 to container port 80)...
+[root@k8s-node02 ~]# docker run -d -p 80:80 b8efb18f159b
+
+use alternate porting:
+[root@k8s-node02 ~]# docker run -d -p 8080:80 b8efb18f159b
+16ef1c78a1c8300c300bb5abbac1f23eea110df88417153f1cddef343b99b324
+[root@k8s-node02 ~]# docker ps
+CONTAINER ID        IMAGE               COMMAND                  CREATED             STATUS              PORTS                  NAMES
+16ef1c78a1c8        b8efb18f159b        "nginx -g 'daemon off"   4 seconds ago       Up 1 seconds        0.0.0.0:8080->80/tcp   ecstatic_sinoussi
+
+testing:
+[root@k8s-node01 ~]# curl 192.168.0.244:8080
+
+Check logs on web node:
+[root@k8s-node02 ~]# docker logs ecstatic_sinoussi
+192.168.0.240 - - [20/Aug/2017:08:22:53 +0000] "GET / HTTP/1.1" 200 612 "-" "curl/7.29.0" "-"
+
+
+doing cool stuff:
+[root@k8s-node03 ~]# docker run -it -p 80:80 docker.io/centos:latest /bin/bash
+[root@08f5b354f490 /]# cd
+[root@08f5b354f490 ~]# yum install -y httpd
+Loaded plugins: fastestmirror, ovl
+base
+~
+~
+
+Created docker file:
+[root@k8s-node03 custom]# cat Dockerfile
+# Dockerfile that modifies centos:centos6 to update, include Apache Web
+# Server and OpenSSH Server, exposing the appropriate ports
+
+FROM centos:centos6
+MAINTAINER dufus@gmail.com
+
+RUN yum upgrade -y
+RUN yum install -y httpd
+RUN yum install -y openssh-server
+EXPOSE 22 80
+
+THEN RAN THE BUILD:
+docker build -t ssh80/withservices:v1 .
+
+Sending build context to Docker daemon 2.048 kB
+Step 1 : FROM centos:centos6
+Trying to pull repository docker.io/library/centos ...
+centos6: Pulling from docker.io/library/centos
+
+cd3b990dbbea: Pull complete
+Digest: sha256:7b8315565896cf97fc663c99ae175760aa1db9f7febe2f7a078696c6897604a7
+ ---> 7ea307891843
+Step 2 : MAINTAINER eddie.p.vasq
+~
+~
+~
+Successfully built 075b5bf9bf7d
+[root@k8s-node03 custom]# docker images
+REPOSITORY              TAG                 IMAGE ID            CREATED             SIZE
+ssh80/withservices      v1                  075b5bf9bf7d        10 seconds ago      322.7 MB
+docker.io/centos        centos6             7ea307891843        2 weeks ago         194.3 MB
+docker.io/centos        latest              328edcd84f1b        2 weeks ago         192.5 MB
+docker.io/nginx         latest              b8efb18f159b        3 weeks ago         107.5 MB
+docker.io/hello-world   latest              1815c82652c0        9 weeks ago         1.84 kB
+[root@k8s-node03 custom]# docker run -d -p 8080:22 075b5bf9bf7d
+
+
+Created an ssh daemon process to do things:
+[root@k8s-node03 custom]# docker run -itd -p 80:22 075b5bf9bf7d /bin/bash
+e63910500ba6f534593e4a388860cc11e573dd28292a681e9438dcbdae78407f
+[root@k8s-node03 custom]# docker ps
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS                        NAMES
+e63910500ba6        075b5bf9bf7d        "/bin/bash"         8 seconds ago       Up 4 seconds        80/tcp, 0.0.0.0:80->22/tcp   stoic_kalam
+
+Attach:
+[root@k8s-node03 custom]# docker ps
+CONTAINER ID        IMAGE               COMMAND             CREATED              STATUS              PORTS                        NAMES
+e63910500ba6        075b5bf9bf7d        "/bin/bash"         About a minute ago   Up About a minute   80/tcp, 0.0.0.0:80->22/tcp   stoic_kalam
+[root@k8s-node03 custom]# docker attach stoic_kalam
+[root@e63910500ba6 /]#
+[root@e63910500ba6 /]# service sshd start
+Generating SSH2 RSA host key:                              [  OK  ]
+Generating SSH1 RSA host key:                              [  OK  ]
+Generating SSH2 DSA host key:                              [  OK  ]
+Starting sshd:                                             [  OK  ]
+
+[root@k8s-node04 ~]# ssh -p80 192.168.0.243
+The authenticity of host '[192.168.0.243]:80 ([192.168.0.243]:80)' can't be established.
+RSA key fingerprint is 4d:4d:e0:5a:31:e2:48:75:f2:08:7d:d7:bb:72:c5:18.
+Are you sure you want to continue connecting (yes/no)? yes
+Warning: Permanently added '[192.168.0.243]:80' (RSA) to the list of known hosts.
+root@192.168.0.243's password:
+[root@e63910500ba6 ~]# uptime
+ 08:56:50 up  1:22,  1 user,  load average: 0.04, 0.40, 0.53
+[root@e63910500ba6 ~]#
+
+v
+Starting a mysql container and logging in:
+[root@k8s-node01 ~]# docker run -d --name mysql-container-pub5 -p 3305:3306 -e MYSQL_USER=redhat -e MYSQL_PASSWORD=r3dh4t -e MYSQL_DATABASE=nova -e MYSQL_ROOT_PASSWORD=r3dh4t mysql:5.5
+netstat:
+tcp6       0      0 :::3305                 :::*                    LISTEN      27253/docker-proxy-
+
+can also add persistent storage using -v:
+docker run -v /var/dbfiles:/var/lib/mysql mysql
+
+connect:
+[root@controller-192-168-0-211 ~]# mysqlshow -u root -h 192.168.0.240 -P3305 -p
+Enter password:
++--------------------+
+|     Databases      |
++--------------------+
+| information_schema |
+| mysql              |
+| performance_schema |
++--------------------+
+
+OR:
+you can connect directly from the docker node to container:
+docker exec -it [name_of_container] /bin/bash
+
+
+use namespaces and quotas for some real world examples:
+kubectl config use-context dev
+kubectl apply -f dev-encore-[username]-ns.yaml
+cat dev-encore-[username]-ns.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: [user_name]
+
+also set a quota for this user:
+cat user_name-compute-resources.yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: user_name-compute-resources
+  namespace: [user_name_from_above]
+spec:
+  hard:
+    services: "1"
+    pods: "3"
+    requests.cpu: "2"
+    requests.memory: 1Gi
+    limits.cpu: "4"
+    limits.memory: 2Gi
+
+kubectl apply -f user_name-compute-resources.yaml
+kubectl config user-context user_name
+kubectl describe quota
+
+measure resources, give the container constraints.
+
+kubectl get svc
+kubtectl scale deployment gif-maker --replicas=3
+
+kubectl get events --watch
+
+############
+############
+
+Pod Resource Defninition syntax:
+
+apiVersion: v1
+kind: Pod < Declares a Kub pod resource type
+metadata:
+  name: wildfly < A unique name for a pod in kub that allows admins to run commands on it
+  labels: 
+    name: wildfly < Creates a label with key called 'name' that can be used to be found by other resources, usually a service.
+spec: 
+  containers: 
+    - resources:
+        limits :
+          cpu: 0.5
+      image: do276/todojee
+      name: wildfly 
+      ports: 
+        - containerPort: 8080 < A container dependant attribute identifying which port from the container is exposed.
+          name: wildfly 
+      env: < Defines a collection of environment variables
+        - name: MYSQL_ENV_MYSQL_DATABASE
+          value: items
+        - name: MYSQL_ENV_MYSQL_USER
+          value: user1
+        - name: MYSQL_ENV_MYSQL_PASSWORD
+          value: mypa55
+
+
+############
+############
+
+A set of pods running behind a service is managed by a DeploymentConfig resource. A DeploymentConfig resource embeds a ReplicationController that manages how many replicas have to be created and replaced if fail.
+Minimal Service Definition in json:
+
+{
+    "kind": "Service", < Declares the kind of kub resource
+    "apiVersion": "v1",
+    "metadata": {
+        "name": "quotedb" < a unique name for the service
+    },
+    "spec": {
+        "ports": [ < see 3 below... 
+            {
+                "port": 3306, 
+                "targetPort": 3306 
+            }
+        ],
+        "selector": {
+            "name": "mysqldb" < see 4 below...
+        }
+    }
+}
+
+3. ports is an array of objects that describes network ports expost by the service.
+- The targetPort attribute has to match a containerPort from a pod container definition, while the port attribute is the port that is exposed by the service.
+- Clients connect to the service port and the serivce forwards packets to the pod targetPort.
+
+4. selector is how the service finds pods to forward packets to. The target pods need to have matching labels in their metadata attributes.
+- If the service finds multiple pods with matching labels, it load balances network connections among them.
+
+
+
+
+
+###################
+###################
+Running a nginx service by hand:
+I had created the service prior by:
+[root@k8s-master01 ~]# cat services/nginx.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-svc
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    run: nginx
+
+
+##
+Then I did a manual deployment:
+[root@k8s-master01 ~]# kubectl run nginx --image=docker.io/nginx:latest --replicas=10 --port=8080
+deployment "nginx" created
+
+
+
+then i created the service:
+[root@k8s-master01 ~]# kubectl create -f services/nginx.yaml --validate=false
+service "nginx-svc" created
+[root@k8s-master01 ~]# kubectl get svc
+NAME         CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
+kubernetes   192.168.0.1     <none>        443/TCP   40d
+nginx-svc    192.168.0.236   <none>        80/TCP    3s
+[root@k8s-master01 ~]# kubectl describe svc
+Name:            kubernetes
+Namespace:        default
+Labels:            component=apiserver
+            provider=kubernetes
+Selector:        <none>
+Type:            ClusterIP
+IP:            192.168.0.1
+Port:            https    443/TCP
+Endpoints:        192.168.0.232:6443
+Session Affinity:    ClientIP
+No events.
+
+
+Name:            nginx-svc
+Namespace:        default
+Labels:            <none>
+Selector:        run=nginx
+Type:            ClusterIP
+IP:            192.168.0.236
+Port:            <unset>    80/TCP
+Endpoints:        172.17.0.2:8080,172.17.0.2:8080,172.17.0.2:8080 + 7 more...
+Session Affinity:    None
+No events.
+
